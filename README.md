@@ -79,3 +79,4 @@ Rendering techniques were adapted from the open-source ASCII ecosystem:
 [Acerola's ASCII shader](https://github.com/GarrettGunnell/AcerolaFX) (edge
 direction voting), and [jp2a](https://github.com/Talinx/jp2a) (directional
 edge glyphs).
+# gh-ascii
