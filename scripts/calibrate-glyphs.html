@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<body>
+<pre id="out"></pre>
+<script>
+// Measure ink coverage (total + 2x2 quadrants) for candidate glyphs in the
+// same font stack + baseline geometry the SVG generator uses.
+const FONT = "'Consolas', 'Menlo', 'DejaVu Sans Mono', monospace";
+const SIZE = 64; // render large for accurate coverage
+const LINE = SIZE * 1.2; // matches SVG: font 8 / line-height 9.6
+const BASELINE = LINE - SIZE * 0.375; // matches SVG: y = lineHeight - 3 at 8px
+
+const chars = [];
+for (let c = 33; c <= 126; c++) chars.push(String.fromCharCode(c));
+
+const canvas = document.createElement("canvas");
+const ctx = canvas.getContext("2d", { willReadFrequently: true });
+ctx.font = `${SIZE}px ${FONT}`;
+const cellW = Math.ceil(ctx.measureText("X").width);
+canvas.width = cellW;
+canvas.height = Math.ceil(LINE);
+
+const result = { cellW, cellH: Math.ceil(LINE), glyphs: [] };
+for (const ch of chars) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.font = `${SIZE}px ${FONT}`;
+  ctx.fillStyle = "#fff";
+  ctx.fillText(ch, 0, BASELINE);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  const q = [0, 0, 0, 0];
+  const midX = canvas.width / 2;
+  const midY = canvas.height / 2;
+  for (let y = 0; y < canvas.height; y++) {
+    for (let x = 0; x < canvas.width; x++) {
+      const a = data[(y * canvas.width + x) * 4 + 3] / 255;
+      if (a === 0) continue;
+      const qi = (y < midY ? 0 : 2) + (x < midX ? 0 : 1);
+      q[qi] += a;
+    }
+  }
+  const quadArea = (canvas.width * canvas.height) / 4;
+  result.glyphs.push({
+    ch,
+    q: q.map((v) => +(v / quadArea).toFixed(4)),
+  });
+}
+document.getElementById("out").textContent = JSON.stringify(result);
+</script>
+</body>
+</html>
