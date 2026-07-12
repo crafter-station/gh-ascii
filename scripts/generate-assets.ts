@@ -11,9 +11,10 @@
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 
-const ROOT = join(import.meta.dir, "..");
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 // Tokens from app/globals.css — keep in sync by hand, they rarely change.
 const BG = "#0d0d0d";

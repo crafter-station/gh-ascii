@@ -36,5 +36,8 @@
     "onnxruntime-node",
     "sharp",
     "unrs-resolver"
-  ]
+  ],
+  "overrides": {
+    "sharp": "0.33.5"
+  }
 }

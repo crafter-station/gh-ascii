@@ -1,5 +1,4 @@
 import { Jimp, intToRGBA } from "jimp";
-import { removeBackground } from "@imgly/background-removal-node";
 import { GLYPHS, type Glyph } from "./glyphs";
 
 export type Theme = "dark" | "light";
@@ -81,10 +80,15 @@ async function fetchAvatar(avatarUrl: string): Promise<Blob> {
 
 // ML background removal (ONNX portrait matting). Heuristic flood fills leak
 // through soft hair edges on real photos; the model gives a clean alpha
-// matte. Falls back to the original image if inference fails (e.g. the model
-// CDN is unreachable) — the card still renders, just with its background.
+// matte. Imported lazily: the package loads native modules (sharp,
+// onnxruntime) at import time, which must not run while the build collects
+// page data — and if the host can't load them, the card still renders with
+// its background instead of failing.
 async function cutoutSubject(avatar: Blob): Promise<Blob> {
   try {
+    const { removeBackground } = await import(
+      "@imgly/background-removal-node"
+    );
     return await removeBackground(avatar, {
       output: { format: "image/png" },
     });
