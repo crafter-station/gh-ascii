@@ -8,6 +8,14 @@ pulled live from the GitHub API.
 Inspired by [Andrew6rant's profile README](https://github.com/Andrew6rant/Andrew6rant/tree/main),
 but with zero manual setup: just a handle.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/example-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/example-light.svg" />
+  <img alt="gh-ascii card for torvalds — ASCII portrait next to live GitHub stats" src="assets/example-dark.svg" />
+</picture>
+
+<sub>`torvalds`, generated fully automatically — avatar → ASCII, stats via the GitHub API.</sub>
+
 ## Usage
 
 No hosting required — the SVGs live in your own repo:
