@@ -51,8 +51,13 @@ function Generator() {
   const [cols, setCols] = useState<number>(100);
   const [loading, setLoading] = useState(Boolean(initialHandle));
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
+  // Origin only appears in content shown after user interaction, so the
+  // SSR/client mismatch of window access never reaches the DOM.
+  const [origin] = useState(() =>
+    typeof window === "undefined" ? "" : window.location.origin
+  );
 
   const colsQuery = cols !== 100 ? `&cols=${cols}` : "";
   const cardPath = handle ? `/${handle}?theme=${theme}${colsQuery}` : null;
@@ -63,6 +68,29 @@ function Generator() {
   <source media="(prefers-color-scheme: light)" srcset="light_mode.svg" />
   <img alt="${handle ?? "my"}'s GitHub profile" src="dark_mode.svg" />
 </picture>`;
+
+  // Paste-into-your-agent prompt that automates the whole flow.
+  const aiPrompt = `Add a gh-ascii ASCII profile card to my GitHub profile README.
+
+Context:
+- My GitHub handle: ${handle}
+- My profile README lives in the repo ${handle}/${handle}. If it doesn't exist, create it as a public repo with a README.
+- Card generator: ${origin}/${handle}?theme=dark|light returns an SVG.
+
+Steps:
+1. Clone github.com/${handle}/${handle} and download both themes into its root:
+   curl -fL "${origin}/${handle}?theme=dark${colsQuery}" -o dark_mode.svg
+   curl -fL "${origin}/${handle}?theme=light${colsQuery}" -o light_mode.svg
+2. Render or open both SVGs and look at them before committing.
+3. Insert this at the top of README.md, keeping all existing content:
+   <picture>
+     <source media="(prefers-color-scheme: dark)" srcset="dark_mode.svg" />
+     <source media="(prefers-color-scheme: light)" srcset="light_mode.svg" />
+     <img alt="${handle}'s GitHub profile" src="dark_mode.svg" />
+   </picture>
+   If the light card reads poorly against white, use a plain <img src="dark_mode.svg" width="100%" /> instead of <picture> — the dark card carries its own background.
+4. Commit both SVGs + the README change ("feat: add gh-ascii profile card") and push.
+5. Confirm it renders at github.com/${handle}.`;
 
   function generate(e: React.FormEvent) {
     e.preventDefault();
@@ -84,10 +112,10 @@ function Generator() {
     };
   }
 
-  async function copySnippet() {
-    await navigator.clipboard.writeText(snippet);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+  async function copy(key: string, text: string) {
+    await navigator.clipboard.writeText(text);
+    setCopied(key);
+    setTimeout(() => setCopied(null), 1500);
   }
 
   async function downloadSvg(downloadTheme: "dark" | "light") {
@@ -267,10 +295,10 @@ function Generator() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={copySnippet}
+                      onClick={() => copy("snippet", snippet)}
                       className="font-mono"
                     >
-                      {copied ? "copied" : "copy"}
+                      {copied === "snippet" ? "copied" : "copy"}
                     </Button>
                   </div>
                   <pre className="mt-3 overflow-x-auto border bg-card p-4 font-mono text-xs leading-relaxed text-muted-foreground">
@@ -280,6 +308,30 @@ function Generator() {
                     The &lt;picture&gt; tag switches between dark and light
                     automatically with the viewer&apos;s GitHub theme.
                   </p>
+                </div>
+
+                <div className="bg-card/50 p-5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                        Agent mode — skip the steps
+                      </p>
+                      <p className="mt-1 text-sm">
+                        Paste this prompt into Claude Code, Cursor, or any
+                        coding agent and it does all of the above for you.
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={() => copy("prompt", aiPrompt)}
+                      className="shrink-0 font-mono"
+                    >
+                      {copied === "prompt" ? "copied" : "copy prompt"}
+                    </Button>
+                  </div>
+                  <pre className="mt-3 max-h-48 overflow-auto border bg-card p-4 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                    {aiPrompt}
+                  </pre>
                 </div>
               </div>
             )}
