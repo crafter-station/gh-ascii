@@ -3,6 +3,7 @@
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { GithubStars } from "@/components/github-stars";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -140,14 +141,17 @@ Steps:
       <header className="border-b">
         <div className="mx-auto flex h-14 w-full max-w-5xl items-center justify-between px-6">
           <span className="font-mono text-sm">gh-ascii</span>
-          <a
-            href="https://github.com/Andrew6rant/Andrew6rant"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
-          >
-            inspiration ↗
-          </a>
+          <div className="flex items-center gap-4">
+            <a
+              href="https://github.com/Andrew6rant/Andrew6rant"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              inspiration ↗
+            </a>
+            <GithubStars />
+          </div>
         </div>
       </header>
 
