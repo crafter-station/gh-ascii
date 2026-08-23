@@ -1,5 +1,4 @@
-const API = "https://api.github.com";
-
+﻿const API = "https://api.github.com";
 export interface GitHubStats {
   login: string;
   name: string;
@@ -16,13 +15,11 @@ export interface GitHubStats {
   languages: string[];
   commits: number | null;
 }
-
 export class GitHubUserNotFound extends Error {
   constructor(login: string) {
     super(`GitHub user "${login}" not found`);
   }
 }
-
 function ghHeaders(accept = "application/vnd.github+json"): HeadersInit {
   const headers: Record<string, string> = {
     Accept: accept,
@@ -34,22 +31,29 @@ function ghHeaders(accept = "application/vnd.github+json"): HeadersInit {
   }
   return headers;
 }
-
 interface RepoSummary {
   fork: boolean;
   stargazers_count: number;
   language: string | null;
 }
-
+// Paginate through ALL public repos. per_page=100 is the API maximum, so
+// users with more than 100 repos previously had stars/languages computed
+// from only the 100 most recently pushed repos (see issue #2).
 async function fetchRepos(login: string): Promise<RepoSummary[]> {
-  const res = await fetch(
-    `${API}/users/${login}/repos?per_page=100&sort=pushed`,
-    { headers: ghHeaders(), next: { revalidate: 3600 } }
-  );
-  if (!res.ok) return [];
-  return res.json();
+  const repos: RepoSummary[] = [];
+  for (let page = 1; ; page++) {
+    const res = await fetch(
+      `${API}/users/${login}/repos?per_page=100&page=${page}&sort=pushed`,
+      { headers: ghHeaders(), next: { revalidate: 3600 } }
+    );
+    if (!res.ok) return repos.length > 0 ? repos : [];
+    const batch = await res.json();
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    repos.push(...batch);
+    if (batch.length < 100) break; // last page
+  }
+  return repos;
 }
-
 // The commit search endpoint has a separate (small) rate limit, so treat it
 // as best-effort decoration rather than required data.
 async function fetchCommitCount(login: string): Promise<number | null> {
@@ -65,7 +69,6 @@ async function fetchCommitCount(login: string): Promise<number | null> {
     return null;
   }
 }
-
 export async function fetchStats(login: string): Promise<GitHubStats> {
   const userRes = await fetch(`${API}/users/${login}`, {
     headers: ghHeaders(),
@@ -76,14 +79,11 @@ export async function fetchStats(login: string): Promise<GitHubStats> {
     throw new Error(`GitHub API error: ${userRes.status} ${await userRes.text()}`);
   }
   const user = await userRes.json();
-
   const [repos, commits] = await Promise.all([
     fetchRepos(login),
     fetchCommitCount(login),
   ]);
-
   const stars = repos.reduce((sum, r) => sum + r.stargazers_count, 0);
-
   const langCounts = new Map<string, number>();
   for (const repo of repos) {
     if (repo.fork || !repo.language) continue;
@@ -93,7 +93,6 @@ export async function fetchStats(login: string): Promise<GitHubStats> {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
     .map(([lang]) => lang);
-
   return {
     login: user.login,
     name: user.name || user.login,
@@ -111,7 +110,6 @@ export async function fetchStats(login: string): Promise<GitHubStats> {
     commits,
   };
 }
-
 export function accountUptime(createdAt: string, now = new Date()): string {
   const created = new Date(createdAt);
   let years = now.getFullYear() - created.getFullYear();
