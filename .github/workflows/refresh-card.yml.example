@@ -1,0 +1,39 @@
+﻿# ============================================================
+# gh-ascii daily card refresher
+#
+# HOW TO USE (copy me into YOUR profile repo):
+#   1. Create <your-username>/<your-username> repo if needed
+#   2. Save this file as .github/workflows/refresh-card.yml there
+#   3. Replace YOUR_HANDLE below with your GitHub username
+#   4. Done! Cards refresh daily at 04:00 UTC.
+#
+# NOTE: GitHub auto-disables scheduled workflows after 60 days of
+# repo inactivity. Re-enable from the Actions tab if that happens.
+# ============================================================
+name: Refresh gh-ascii cards
+on:
+  schedule:
+    - cron: "0 4 * * *"   # daily 04:00 UTC
+  workflow_dispatch:       # allow manual runs from the Actions tab
+permissions:
+  contents: write
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download fresh cards
+        run: |
+          curl -fsL "https://gh.crafter.run/YOUR_HANDLE?theme=dark"  -o dark_mode.svg
+          curl -fsL "https://gh.crafter.run/YOUR_HANDLE?theme=light" -o light_mode.svg
+      - name: Commit if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dark_mode.svg light_mode.svg
+          if git diff --cached --quiet; then
+            echo "Cards unchanged - nothing to commit."
+          else
+            git commit -m "chore: refresh gh-ascii profile cards [skip ci]"
+            git push
+          fi
