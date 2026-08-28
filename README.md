@@ -67,6 +67,93 @@ Steps:
 5. Confirm it renders at github.com/<handle>.
 ```
 
+### Keep it fresh — daily refresh workflow
+
+Committed SVGs are a snapshot: stars, followers and especially Uptime drift out
+of date and nothing tells you.
+[`.github/workflows/refresh-card.yml.example`](.github/workflows/refresh-card.yml.example)
+is a drop-in workflow for your profile repo — daily cron plus a manual **Run
+workflow** button, and it commits only when the card actually changed, so it
+never spams your history.
+
+Copy it in as `.github/workflows/refresh-card.yml` and replace `<handle>` with
+your username:
+
+<details>
+<summary><code>refresh-card.yml</code></summary>
+
+```yaml
+# gh-ascii — daily card refresh
+#
+# Copy this file into your profile repo (github.com/<you>/<you>) as
+# .github/workflows/refresh-card.yml and replace <handle> with your username.
+#
+# Committed SVGs are a frozen snapshot: stars, followers and Uptime silently
+# go stale. This re-downloads both themes once a day and commits them only when
+# the card actually changed, so the numbers stay current without you touching
+# anything.
+#
+# Heads-up: GitHub disables scheduled workflows after 60 days of repository
+# inactivity and emails the owner. Profile repos are quiet by design, so this
+# can bite — if the card stops updating, re-enable the workflow from the
+# Actions tab (the "Run workflow" button is also a quick way to check it).
+
+name: Refresh gh-ascii card
+
+on:
+  schedule:
+    # Daily at 06:17 UTC. Off-the-hour times get scheduled more reliably —
+    # GitHub drops runs when everyone piles onto :00.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-gh-ascii-card
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download both themes
+        env:
+          HANDLE: <handle>
+          # Swap this for your own deployment if you self-host gh-ascii.
+          GH_ASCII_URL: https://gh.crafter.run
+          # Optional: ASCII resolution, 40-160 (default 100).
+          # COLS: "120"
+        run: |
+          curl -fsSL --retry 3 --retry-delay 5 \
+            "$GH_ASCII_URL/$HANDLE?theme=dark${COLS:+&cols=$COLS}" \
+            -o dark_mode.svg
+          curl -fsSL --retry 3 --retry-delay 5 \
+            "$GH_ASCII_URL/$HANDLE?theme=light${COLS:+&cols=$COLS}" \
+            -o light_mode.svg
+
+      - name: Commit only if the card changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dark_mode.svg light_mode.svg
+          if git diff --cached --quiet; then
+            echo "Card unchanged — nothing to commit."
+          else
+            git commit -m "chore: refresh gh-ascii card"
+            git push
+          fi
+```
+
+</details>
+
+One caveat worth knowing: GitHub disables scheduled workflows in repos with no
+pushes for 60 days. Profile repos are quiet by design, so if the card ever
+stops updating, re-enable the workflow from the Actions tab.
+
 API (used by the UI, or embed directly if you host a deployment):
 
 - `GET /<handle>` — returns the SVG card (`?theme=dark` default, `?theme=light`)
@@ -120,4 +207,3 @@ Rendering techniques were adapted from the open-source ASCII ecosystem:
 [Acerola's ASCII shader](https://github.com/GarrettGunnell/AcerolaFX) (edge
 direction voting), and [jp2a](https://github.com/Talinx/jp2a) (directional
 edge glyphs).
-# gh-ascii
