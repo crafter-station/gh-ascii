@@ -2,8 +2,8 @@
 
 Turn any GitHub handle into a neofetch-style ASCII profile card (SVG) for your
 profile README — fully automatic. The avatar is converted to ASCII art and the
-stats (uptime, languages, repos, stars, commits, followers, contact info) are
-pulled live from the GitHub API.
+stats (uptime, languages, repos, stars, commits, contributions, contact info)
+are pulled live from the GitHub API.
 
 Inspired by [Andrew6rant's profile README](https://github.com/Andrew6rant/Andrew6rant/tree/main),
 but with zero manual setup: just a handle.
@@ -186,9 +186,28 @@ bun install
 bun run dev
 ```
 
-Optional: set `GITHUB_TOKEN` to raise the GitHub API rate limits (unauthenticated
-is 60 requests/hour; commit counts come from the commit-search API and degrade
-gracefully when rate-limited).
+### `GITHUB_TOKEN`
+
+Set it. It is nominally optional, but it decides how much of the card exists:
+
+| | without a token | with a token |
+| --- | --- | --- |
+| Rate limit | 60 requests/hour, per deployment IP | 5,000/hour |
+| Repos scanned for stars | 300 | 1,500 |
+| Languages | top 5 by repo count | share of code by bytes (`C 98%, Assembly 1%`) |
+| Commits, PRs, issues, reviews, contributed-to | — | shown |
+| Forks, top repo | — | shown |
+| Contribution graph | — | shown |
+
+Everything in the right-hand column comes from the GraphQL API, which has no
+anonymous tier, so those rows are simply omitted when no token is set. They are
+also omitted for organization handles, which GraphQL has no `user` for — orgs
+still render the REST half of the card.
+
+Commit counts deliberately do **not** come from the commit-search API: it
+counts every fork's copy of a commit, which rendered `torvalds` at 410 million
+commits. They are summed from `contributionsCollection` instead, one query per
+year of the account's life, which is the number GitHub's own profile shows.
 
 Responses are cached for an hour (`Cache-Control` + fetch revalidation), so
 cards stay fresh without hammering the API.
