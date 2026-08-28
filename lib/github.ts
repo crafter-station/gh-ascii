@@ -23,6 +23,10 @@ export class GitHubUserNotFound extends Error {
   }
 }
 
+export function hasToken(): boolean {
+  return Boolean(process.env.GITHUB_TOKEN);
+}
+
 function ghHeaders(accept = "application/vnd.github+json"): HeadersInit {
   const headers: Record<string, string> = {
     Accept: accept,
@@ -43,10 +47,15 @@ interface RepoSummary {
 
 const REPO_PAGE_SIZE = 100; // GitHub's per_page maximum
 // Bounds the fan-out so a handle with thousands of repos can't turn one card
-// render into an unbounded request storm. Covers accounts up to 1,500 repos;
-// past that the least recently pushed tail is dropped (the list is sorted by
-// `pushed`), which is the cheapest thing to be wrong about.
-const MAX_REPO_PAGES = 15;
+// render into an unbounded request storm. Past the cap the least recently
+// pushed tail is dropped (the list is sorted by `pushed`), which is the
+// cheapest thing to be wrong about.
+//
+// The unauthenticated budget is 60 requests/hour for the whole deployment's
+// IP, so one 15-page render there would spend a quarter of it on a single
+// card. Tokened deployments get 5,000/hour and can afford the accuracy.
+const MAX_REPO_PAGES_AUTHED = 15;
+const MAX_REPO_PAGES_ANON = 3;
 
 async function fetchRepoPage(
   login: string,
@@ -71,7 +80,7 @@ async function fetchRepos(
   publicRepos: number
 ): Promise<RepoSummary[]> {
   const pages = Math.min(
-    MAX_REPO_PAGES,
+    hasToken() ? MAX_REPO_PAGES_AUTHED : MAX_REPO_PAGES_ANON,
     Math.max(1, Math.ceil(publicRepos / REPO_PAGE_SIZE))
   );
   const batches = await Promise.all(
