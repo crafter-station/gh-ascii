@@ -41,13 +41,43 @@ interface RepoSummary {
   language: string | null;
 }
 
-async function fetchRepos(login: string): Promise<RepoSummary[]> {
+const REPO_PAGE_SIZE = 100; // GitHub's per_page maximum
+// Bounds the fan-out so a handle with thousands of repos can't turn one card
+// render into an unbounded request storm. Covers accounts up to 1,500 repos;
+// past that the least recently pushed tail is dropped (the list is sorted by
+// `pushed`), which is the cheapest thing to be wrong about.
+const MAX_REPO_PAGES = 15;
+
+async function fetchRepoPage(
+  login: string,
+  page: number
+): Promise<RepoSummary[]> {
   const res = await fetch(
-    `${API}/users/${login}/repos?per_page=100&sort=pushed`,
+    `${API}/users/${login}/repos?per_page=${REPO_PAGE_SIZE}&page=${page}&sort=pushed`,
     { headers: ghHeaders(), next: { revalidate: 3600 } }
   );
   if (!res.ok) return [];
-  return res.json();
+  const batch = await res.json();
+  return Array.isArray(batch) ? batch : [];
+}
+
+// One page only covers the 100 most recently pushed repos, which understates
+// stars and skews languages for anyone past that. `public_repos` gives us the
+// page count up front, so every page goes out in parallel instead of walking
+// `Link` headers a round trip at a time. A page that fails (rate limit) costs
+// us its repos rather than the whole card.
+async function fetchRepos(
+  login: string,
+  publicRepos: number
+): Promise<RepoSummary[]> {
+  const pages = Math.min(
+    MAX_REPO_PAGES,
+    Math.max(1, Math.ceil(publicRepos / REPO_PAGE_SIZE))
+  );
+  const batches = await Promise.all(
+    Array.from({ length: pages }, (_, i) => fetchRepoPage(login, i + 1))
+  );
+  return batches.flat();
 }
 
 // The commit search endpoint has a separate (small) rate limit, so treat it
@@ -77,8 +107,11 @@ export async function fetchStats(login: string): Promise<GitHubStats> {
   }
   const user = await userRes.json();
 
+  const publicRepos: number =
+    typeof user.public_repos === "number" ? user.public_repos : 0;
+
   const [repos, commits] = await Promise.all([
-    fetchRepos(login),
+    fetchRepos(login, publicRepos),
     fetchCommitCount(login),
   ]);
 
@@ -105,7 +138,7 @@ export async function fetchStats(login: string): Promise<GitHubStats> {
     email: user.email || null,
     twitter: user.twitter_username || null,
     followers: user.followers,
-    publicRepos: user.public_repos,
+    publicRepos,
     stars,
     languages,
     commits,
