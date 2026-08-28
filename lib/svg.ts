@@ -1,4 +1,5 @@
 import { accountUptime, type GitHubStats } from "./github";
+import type { LanguageShare } from "./github-graphql";
 import type { Theme } from "./ascii";
 
 const FONT_SIZE = 16;
@@ -24,6 +25,7 @@ const PALETTES = {
     dots: "#484f58",
     value: "#c9d1d9",
     number: "#79c0ff",
+    spark: "#39d353",
   },
   light: {
     bg: "#ffffff",
@@ -35,6 +37,7 @@ const PALETTES = {
     dots: "#8c959f",
     value: "#24292f",
     number: "#0550ae",
+    spark: "#2da44e",
   },
 } satisfies Record<Theme, Record<string, string>>;
 
@@ -55,6 +58,38 @@ type Line = Span[];
 
 function truncate(value: string, max: number): string {
   return value.length > max ? value.slice(0, max - 1) + "…" : value;
+}
+
+// "JavaScript 63%, TypeScript 25%, Swift 7%" — languages under 1% of the code
+// are noise, and the list is trimmed entry by entry rather than mid-word.
+function formatLanguages(
+  languages: LanguageShare[],
+  maxWidth: number
+): string {
+  const parts = languages
+    .map((l) => ({ name: l.name, percent: Math.round(l.share * 100) }))
+    .filter((l) => l.percent >= 1)
+    .slice(0, 5)
+    .map((l) => `${l.name} ${l.percent}%`);
+  while (parts.length > 1 && parts.join(", ").length > maxWidth) parts.pop();
+  return parts.join(", ");
+}
+
+const SPARK = " ▁▂▃▄▅▆▇█";
+
+// A linear scale renders as a flat line with one spike for anyone who has had
+// a busy week, so weeks are placed on a log scale. Zero stays blank, so gaps
+// still read as gaps.
+function sparkline(weeks: number[]): string {
+  const recent = weeks.slice(-52);
+  const max = Math.max(...recent, 1);
+  return recent
+    .map((count) => {
+      if (count <= 0) return SPARK[0];
+      const level = 1 + Math.floor((Math.log1p(count) / Math.log1p(max)) * 7);
+      return SPARK[Math.max(1, Math.min(8, level))];
+    })
+    .join("");
 }
 
 function buildInfoLines(stats: GitHubStats, theme: Theme): Line[] {
@@ -105,7 +140,12 @@ function buildInfoLines(stats: GitHubStats, theme: Theme): Line[] {
   kv("Uptime", accountUptime(stats.createdAt));
   if (stats.location) kv("Location", stats.location);
   if (stats.company) kv("Company", stats.company);
-  if (stats.languages.length > 0) {
+  // Byte shares when GraphQL gave them to us — ranking by repo count puts
+  // OpenSCAD on Linus Torvalds' card.
+  const contrib = stats.contributions;
+  if (contrib && contrib.languages.length > 0) {
+    kv("Languages", formatLanguages(contrib.languages, INFO_COLS - 17));
+  } else if (stats.languages.length > 0) {
     kv("Languages", stats.languages.join(", "));
   }
 
@@ -123,8 +163,32 @@ function buildInfoLines(stats: GitHubStats, theme: Theme): Line[] {
   header("GitHub Stats");
   const n = (value: number) => value.toLocaleString("en-US");
   kv2("Repos", n(stats.publicRepos), "Stars", n(stats.stars));
-  if (stats.commits) {
-    kv2("Commits", n(stats.commits), "Followers", n(stats.followers));
+  if (contrib) {
+    kv2("Forks", n(contrib.forks), "Followers", n(stats.followers));
+    kv2("Commits", n(contrib.commits), "Contributed", n(contrib.contributedTo));
+    kv2("PRs", n(contrib.pullRequests), "Issues", n(contrib.issues));
+    if (contrib.topRepo) {
+      kv("Top repo", `${contrib.topRepo.name} (${n(contrib.topRepo.stars)} ★)`);
+    }
+
+    blank();
+    header("Last 12 Months");
+    kv2(
+      "Contributions",
+      n(contrib.lastYear),
+      "Reviews",
+      n(contrib.reviews)
+    );
+    // The calendar total already includes private work, so this line is a
+    // breakdown rather than an addition — worth a row only when it is a real
+    // share of the year. "Private: 1" is noise.
+    if (
+      contrib.privateContributions > 0 &&
+      contrib.privateContributions >= contrib.lastYear * 0.05
+    ) {
+      kv("Private", n(contrib.privateContributions), c.number);
+    }
+    lines.push([{ text: `  ${sparkline(contrib.weeks)}`, color: c.spark }]);
   } else {
     kv("Followers", n(stats.followers), c.number);
   }

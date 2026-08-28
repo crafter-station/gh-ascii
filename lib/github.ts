@@ -1,3 +1,5 @@
+import { fetchContributions, type ContributionStats } from "./github-graphql";
+
 const API = "https://api.github.com";
 
 export interface GitHubStats {
@@ -14,13 +16,22 @@ export interface GitHubStats {
   publicRepos: number;
   stars: number;
   languages: string[];
-  commits: number | null;
+  /** Present only on tokened deployments, and never for organizations. */
+  contributions: ContributionStats | null;
 }
 
 export class GitHubUserNotFound extends Error {
   constructor(login: string) {
     super(`GitHub user "${login}" not found`);
   }
+}
+
+// GitHub profile fields arrive with stray whitespace often enough to skew the
+// card's dot leaders ("India " renders a column short).
+function text(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 export function hasToken(): boolean {
@@ -89,22 +100,6 @@ async function fetchRepos(
   return batches.flat();
 }
 
-// The commit search endpoint has a separate (small) rate limit, so treat it
-// as best-effort decoration rather than required data.
-async function fetchCommitCount(login: string): Promise<number | null> {
-  try {
-    const res = await fetch(
-      `${API}/search/commits?q=author:${login}&per_page=1`,
-      { headers: ghHeaders(), next: { revalidate: 3600 } }
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    return typeof data.total_count === "number" ? data.total_count : null;
-  } catch {
-    return null;
-  }
-}
-
 export async function fetchStats(login: string): Promise<GitHubStats> {
   const userRes = await fetch(`${API}/users/${login}`, {
     headers: ghHeaders(),
@@ -119,9 +114,9 @@ export async function fetchStats(login: string): Promise<GitHubStats> {
   const publicRepos: number =
     typeof user.public_repos === "number" ? user.public_repos : 0;
 
-  const [repos, commits] = await Promise.all([
+  const [repos, contributions] = await Promise.all([
     fetchRepos(login, publicRepos),
-    fetchCommitCount(login),
+    fetchContributions(login, user.created_at),
   ]);
 
   const stars = repos.reduce((sum, r) => sum + r.stargazers_count, 0);
@@ -141,16 +136,16 @@ export async function fetchStats(login: string): Promise<GitHubStats> {
     name: user.name || user.login,
     avatarUrl: user.avatar_url,
     createdAt: user.created_at,
-    location: user.location || null,
-    company: user.company || null,
-    blog: user.blog || null,
-    email: user.email || null,
-    twitter: user.twitter_username || null,
+    location: text(user.location),
+    company: text(user.company),
+    blog: text(user.blog),
+    email: text(user.email),
+    twitter: text(user.twitter_username),
     followers: user.followers,
     publicRepos,
     stars,
     languages,
-    commits,
+    contributions,
   };
 }
 
