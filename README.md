@@ -158,6 +158,9 @@ API (used by the UI, or embed directly if you host a deployment):
 
 - `GET /<handle>` — returns the SVG card (`?theme=dark` default, `?theme=light`)
 - `?cols=40..160` — ASCII resolution (default 100); higher = more detail, bigger card
+- `?image=<url>` — custom image URL for the ASCII portrait (replaces default GitHub avatar)
+- `?bg=keep` or `?cutout=false` — preserve original image background (disables ML portrait cutout)
+- `POST /<handle>` — multipart form upload (`image` file, `theme`, `cols`, `bg`) to render an SVG from a local file
 
 ## How the ASCII rendering works
 

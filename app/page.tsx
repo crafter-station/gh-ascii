@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { GithubStars } from "@/components/github-stars";
@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 const DETAIL_LEVELS = [80, 100, 120, 140] as const;
+type AvatarMode = "github" | "url" | "upload";
 
 function Segmented<T extends string | number>({
   value,
@@ -42,46 +43,135 @@ function Segmented<T extends string | number>({
 }
 
 function Generator() {
-  // ?u=<handle> makes generated cards shareable/linkable.
   const searchParams = useSearchParams();
   const initialHandle = searchParams.get("u");
+  const initialImage = searchParams.get("image") || searchParams.get("img") || "";
 
   const [input, setInput] = useState(initialHandle ?? "");
   const [handle, setHandle] = useState<string | null>(initialHandle);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [cols, setCols] = useState<number>(100);
+  const [bgCutout, setBgCutout] = useState<boolean>(true);
+  const [avatarMode, setAvatarMode] = useState<AvatarMode>(
+    initialImage ? "url" : "github"
+  );
+  const [imageUrl, setImageUrl] = useState<string>(initialImage);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [uploadedPreview, setUploadedPreview] = useState<string | null>(null);
+  const [uploadedSvgUrl, setUploadedSvgUrl] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
+
   const [loading, setLoading] = useState(Boolean(initialHandle));
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
-  // Origin only appears in content shown after user interaction, so the
-  // SSR/client mismatch of window access never reaches the DOM.
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const [origin] = useState(() =>
     typeof window === "undefined" ? "" : window.location.origin
   );
 
   const colsQuery = cols !== 100 ? `&cols=${cols}` : "";
-  const cardPath = handle ? `/${handle}?theme=${theme}${colsQuery}` : null;
-  // The SVGs get committed to the user's profile repo, so the README
-  // references them as plain files — no hosting, no external requests.
+  const cutoutQuery = !bgCutout ? "&bg=keep" : "";
+  const imageQuery =
+    avatarMode === "url" && imageUrl.trim()
+      ? `&image=${encodeURIComponent(imageUrl.trim())}`
+      : "";
+
+  const cardPath =
+    handle && avatarMode !== "upload"
+      ? `/${handle}?theme=${theme}${colsQuery}${imageQuery}${cutoutQuery}`
+      : null;
+
+  // Clean up object URLs
+  useEffect(() => {
+    return () => {
+      if (uploadedPreview) URL.revokeObjectURL(uploadedPreview);
+      if (uploadedSvgUrl) URL.revokeObjectURL(uploadedSvgUrl);
+    };
+  }, [uploadedPreview, uploadedSvgUrl]);
+
+  // Handle uploaded file generation via POST
+  useEffect(() => {
+    if (avatarMode !== "upload" || !uploadedFile || !handle) {
+      return;
+    }
+
+    let isMounted = true;
+    const controller = new AbortController();
+
+    async function loadUploadedCard() {
+      try {
+        const formData = new FormData();
+        formData.append("image", uploadedFile!);
+        formData.append("theme", theme);
+        formData.append("cols", String(cols));
+        formData.append("bg", bgCutout ? "remove" : "keep");
+
+        const res = await fetch(`/${handle}`, {
+          method: "POST",
+          body: formData,
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || `Failed to generate card: ${res.status}`);
+        }
+
+        const blob = await res.blob();
+        if (!isMounted) return;
+
+        const newUrl = URL.createObjectURL(blob);
+        setUploadedSvgUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return newUrl;
+        });
+        setLoading(false);
+      } catch (err: unknown) {
+        if (
+          !isMounted ||
+          (err instanceof DOMException && err.name === "AbortError")
+        ) {
+          return;
+        }
+        setLoading(false);
+        const message =
+          err instanceof Error
+            ? err.message
+            : "Failed to render card with uploaded image.";
+        setError(message);
+      }
+    }
+
+    loadUploadedCard();
+
+    return () => {
+      isMounted = false;
+      controller.abort();
+    };
+  }, [avatarMode, uploadedFile, handle, theme, cols, bgCutout]);
+
+  const activeCardSrc = avatarMode === "upload" ? uploadedSvgUrl : cardPath;
+
   const snippet = `<picture>
   <source media="(prefers-color-scheme: dark)" srcset="dark_mode.svg" />
   <source media="(prefers-color-scheme: light)" srcset="light_mode.svg" />
   <img alt="${handle ?? "my"}'s GitHub profile" src="dark_mode.svg" />
 </picture>`;
 
-  // Paste-into-your-agent prompt that automates the whole flow.
   const aiPrompt = `Add a gh-ascii ASCII profile card to my GitHub profile README.
 
 Context:
 - My GitHub handle: ${handle}
 - My profile README lives in the repo ${handle}/${handle}. If it doesn't exist, create it as a public repo with a README.
-- Card generator: ${origin}/${handle}?theme=dark|light returns an SVG.
+- Card generator: ${origin}/${handle}?theme=dark|light${imageQuery}${cutoutQuery} returns an SVG.
 
 Steps:
 1. Clone github.com/${handle}/${handle} and download both themes into its root:
-   curl -fL "${origin}/${handle}?theme=dark${colsQuery}" -o dark_mode.svg
-   curl -fL "${origin}/${handle}?theme=light${colsQuery}" -o light_mode.svg
+   curl -fL "${origin}/${handle}?theme=dark${colsQuery}${imageQuery}${cutoutQuery}" -o dark_mode.svg
+   curl -fL "${origin}/${handle}?theme=light${colsQuery}${imageQuery}${cutoutQuery}" -o light_mode.svg
 2. Render or open both SVGs and look at them before committing.
 3. Insert this at the top of README.md, keeping all existing content:
    <picture>
@@ -100,7 +190,37 @@ Steps:
     setError(null);
     setLoading(true);
     setHandle(clean);
-    window.history.replaceState(null, "", `/?u=${encodeURIComponent(clean)}`);
+
+    const params = new URLSearchParams();
+    params.set("u", clean);
+    if (avatarMode === "url" && imageUrl.trim()) {
+      params.set("image", imageUrl.trim());
+    }
+    window.history.replaceState(null, "", `/?${params.toString()}`);
+  }
+
+  function handleFileSelect(file: File) {
+    if (!file.type.startsWith("image/")) {
+      setError("Please select a valid image file (PNG, JPEG, WebP, GIF).");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setError("Image file is too large (maximum 10MB).");
+      return;
+    }
+    setError(null);
+    if (handle) setLoading(true);
+    setUploadedFile(file);
+    if (uploadedPreview) URL.revokeObjectURL(uploadedPreview);
+    setUploadedPreview(URL.createObjectURL(file));
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFileSelect(e.dataTransfer.files[0]);
+    }
   }
 
   function refresh<T>(setter: (v: T) => void) {
@@ -123,14 +243,40 @@ Steps:
     if (!handle) return;
     setDownloading(downloadTheme);
     try {
-      const res = await fetch(`/${handle}?theme=${downloadTheme}${colsQuery}`);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${downloadTheme}_mode.svg`;
-      a.click();
-      URL.revokeObjectURL(url);
+      if (avatarMode === "upload" && uploadedFile) {
+        const formData = new FormData();
+        formData.append("image", uploadedFile);
+        formData.append("theme", downloadTheme);
+        formData.append("cols", String(cols));
+        formData.append("bg", bgCutout ? "remove" : "keep");
+
+        const res = await fetch(`/${handle}`, {
+          method: "POST",
+          body: formData,
+        });
+        if (!res.ok) throw new Error("Download failed");
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${downloadTheme}_mode.svg`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } else {
+        const res = await fetch(
+          `/${handle}?theme=${downloadTheme}${colsQuery}${imageQuery}${cutoutQuery}`
+        );
+        if (!res.ok) throw new Error("Download failed");
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${downloadTheme}_mode.svg`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch {
+      setError(`Failed to download ${downloadTheme}_mode.svg`);
     } finally {
       setDownloading(null);
     }
@@ -161,28 +307,149 @@ Steps:
             Your GitHub profile, as ASCII.
           </h1>
           <p className="mt-3 text-sm text-muted-foreground">
-            Avatar and live stats rendered into a neofetch-style SVG card.
-            Fully automatic — just a handle.
+            Avatar or custom image and live stats rendered into a neofetch-style SVG card.
           </p>
         </div>
 
-        <form onSubmit={generate} className="mt-8 flex w-full max-w-xl">
-          <div className="relative flex-1">
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm text-muted-foreground">
-              @
-            </span>
-            <Input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="github handle"
-              spellCheck={false}
-              autoFocus
-              className="h-11 border-r-0 pl-8 font-mono"
-            />
+        <form onSubmit={generate} className="mt-8 flex w-full max-w-xl flex-col gap-4">
+          <div className="flex w-full">
+            <div className="relative flex-1">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm text-muted-foreground">
+                @
+              </span>
+              <Input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="github handle"
+                spellCheck={false}
+                autoFocus
+                className="h-11 border-r-0 pl-8 font-mono"
+              />
+            </div>
+            <Button type="submit" size="lg" disabled={loading} className="h-11">
+              {loading ? "Generating…" : "Generate"}
+            </Button>
           </div>
-          <Button type="submit" size="lg" disabled={loading} className="h-11">
-            {loading ? "Generating…" : "Generate"}
-          </Button>
+
+          {/* Custom Avatar Mode Selector */}
+          <div className="border bg-card/40 p-4">
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                  Avatar Source
+                </span>
+                <Segmented
+                  value={avatarMode}
+                  options={["github", "url", "upload"] as const}
+                  onChange={(mode) => {
+                    setAvatarMode(mode);
+                    if (handle) {
+                      setError(null);
+                      setLoading(true);
+                    }
+                  }}
+                  format={(m) =>
+                    m === "github"
+                      ? "GitHub Avatar"
+                      : m === "url"
+                      ? "Image URL"
+                      : "Upload File"
+                  }
+                />
+              </div>
+
+              {avatarMode === "url" && (
+                <div className="mt-1 flex items-center gap-3">
+                  <Input
+                    value={imageUrl}
+                    onChange={(e) => {
+                      setImageUrl(e.target.value);
+                      if (handle) {
+                        setError(null);
+                        setLoading(true);
+                      }
+                    }}
+                    placeholder="https://example.com/photo.png (direct image URL)"
+                    spellCheck={false}
+                    className="h-9 font-mono text-xs"
+                  />
+                  {imageUrl.trim() && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setImageUrl("");
+                        if (handle) setLoading(true);
+                      }}
+                      className="h-9 px-2 font-mono text-xs"
+                    >
+                      Clear
+                    </Button>
+                  )}
+                </div>
+              )}
+
+              {avatarMode === "upload" && (
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragActive(true);
+                  }}
+                  onDragLeave={() => setDragActive(false)}
+                  onDrop={handleDrop}
+                  onClick={() => fileInputRef.current?.click()}
+                  className={cn(
+                    "mt-1 flex cursor-pointer flex-col items-center justify-center border border-dashed p-5 transition-colors",
+                    dragActive
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-muted-foreground/50 hover:bg-card"
+                  )}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        handleFileSelect(e.target.files[0]);
+                      }
+                    }}
+                  />
+                  {uploadedPreview ? (
+                    <div className="flex items-center gap-4">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={uploadedPreview}
+                        alt="Uploaded preview"
+                        className="h-12 w-12 border object-cover"
+                      />
+                      <div className="text-left font-mono text-xs">
+                        <p className="font-medium truncate max-w-[240px]">
+                          {uploadedFile?.name}
+                        </p>
+                        <p className="text-muted-foreground text-[10px]">
+                          {uploadedFile
+                            ? `${(uploadedFile.size / 1024).toFixed(1)} KB`
+                            : ""} · Click to replace
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center font-mono text-xs text-muted-foreground">
+                      <p className="font-medium text-foreground">
+                        Drop image here or click to browse
+                      </p>
+                      <p className="mt-1 text-[10px]">
+                        PNG, JPG, WebP, GIF up to 10MB
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
         </form>
 
         <div className="mt-6 flex flex-wrap items-center justify-center gap-x-8 gap-y-3">
@@ -206,38 +473,57 @@ Steps:
               onChange={refresh(setCols)}
             />
           </div>
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+              Background
+            </span>
+            <Segmented
+              value={bgCutout ? "cutout" : "original"}
+              options={["cutout", "original"] as const}
+              onChange={(val) => {
+                setBgCutout(val === "cutout");
+                if (handle && avatarMode !== "upload") {
+                  setError(null);
+                  setLoading(true);
+                }
+              }}
+              format={(v) => (v === "cutout" ? "Auto Cutout" : "Keep BG")}
+            />
+          </div>
         </div>
 
         {error && (
           <p className="mt-8 font-mono text-sm text-red-500">{error}</p>
         )}
 
-        {cardPath && !error && (
+        {handle && !error && activeCardSrc && (
           <section className="mt-10 flex w-full flex-col items-center gap-6">
             <div className="relative w-full border border-dashed p-4">
               {loading && (
                 <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60">
                   <span className="font-mono text-xs text-muted-foreground">
-                    fetching @{handle}…
+                    rendering @{handle}…
                   </span>
                 </div>
               )}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                key={cardPath}
-                src={cardPath}
+                key={activeCardSrc}
+                src={activeCardSrc}
                 alt={`ASCII profile card for ${handle}`}
                 className={cn("mx-auto w-full max-w-4xl", loading && "opacity-40")}
                 ref={(el) => {
-                  // With ?u= deep links the SSR'd image can finish loading
-                  // before hydration attaches onLoad — check on mount.
                   if (el?.complete && el.naturalWidth > 0) setLoading(false);
                 }}
                 onLoad={() => setLoading(false)}
                 onError={() => {
                   setLoading(false);
-                  setHandle(null);
-                  setError(`No card for "${handle}" — does that user exist?`);
+                  if (avatarMode !== "upload") {
+                    setHandle(null);
+                    setError(
+                      `Failed to generate card for "${handle}" — verify username and image.`
+                    );
+                  }
                 }}
               />
             </div>
@@ -314,43 +600,47 @@ Steps:
                   </p>
                 </div>
 
-                <div className="bg-card/50 p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                        Agent mode — skip the steps
-                      </p>
-                      <p className="mt-1 text-sm">
-                        Paste this prompt into Claude Code, Cursor, or any
-                        coding agent and it does all of the above for you.
-                      </p>
+                {avatarMode !== "upload" && (
+                  <div className="bg-card/50 p-5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                          Agent mode — skip the steps
+                        </p>
+                        <p className="mt-1 text-sm">
+                          Paste this prompt into Claude Code, Cursor, or any
+                          coding agent and it does all of the above for you.
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => copy("prompt", aiPrompt)}
+                        className="shrink-0 font-mono"
+                      >
+                        {copied === "prompt" ? "copied" : "copy prompt"}
+                      </Button>
                     </div>
-                    <Button
-                      size="sm"
-                      onClick={() => copy("prompt", aiPrompt)}
-                      className="shrink-0 font-mono"
-                    >
-                      {copied === "prompt" ? "copied" : "copy prompt"}
-                    </Button>
+                    <pre className="mt-3 max-h-48 overflow-auto border bg-card p-4 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                      {aiPrompt}
+                    </pre>
                   </div>
-                  <pre className="mt-3 max-h-48 overflow-auto border bg-card p-4 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                    {aiPrompt}
-                  </pre>
-                </div>
+                )}
               </div>
             )}
 
-            <a
-              href={cardPath}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={cn(
-                buttonVariants({ variant: "ghost", size: "sm" }),
-                "font-mono text-xs text-muted-foreground"
-              )}
-            >
-              Open raw SVG ↗
-            </a>
+            {cardPath && (
+              <a
+                href={cardPath}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={cn(
+                  buttonVariants({ variant: "ghost", size: "sm" }),
+                  "font-mono text-xs text-muted-foreground"
+                )}
+              >
+                Open raw SVG ↗
+              </a>
+            )}
           </section>
         )}
       </main>
@@ -358,7 +648,7 @@ Steps:
       <footer className="border-t">
         <div className="mx-auto flex h-12 w-full max-w-5xl items-center justify-between px-6">
           <span className="font-mono text-[10px] text-muted-foreground">
-            avatar → ascii · stats via github api
+            avatar or custom image → ascii · stats via github api
           </span>
           <span className="font-mono text-[10px] text-muted-foreground">
             dark & light themes

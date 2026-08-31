@@ -64,18 +64,49 @@ interface Cell {
   background: boolean;
 }
 
-async function fetchAvatar(avatarUrl: string): Promise<Blob> {
-  // Ask for a larger source than the sampling grid so the resize averages
-  // real detail instead of upscaling a thumbnail.
-  const url = avatarUrl.includes("?")
-    ? `${avatarUrl}&s=400`
-    : `${avatarUrl}?s=400`;
-  const res = await fetch(url, {
-    headers: { "User-Agent": "gh-ascii" },
-    next: { revalidate: 86400 },
-  });
-  if (!res.ok) throw new Error(`Failed to fetch avatar: ${res.status}`);
-  return res.blob();
+export type ImageInput = string | Blob | Buffer | Uint8Array | ArrayBuffer;
+
+export interface ImageToAsciiOptions {
+  cutout?: boolean;
+}
+
+async function fetchImage(imageInput: ImageInput): Promise<Blob> {
+  if (typeof imageInput === "string") {
+    // Data URI support
+    if (imageInput.startsWith("data:")) {
+      const match = imageInput.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        const buffer = Buffer.from(match[2], "base64");
+        return new Blob([buffer as unknown as BlobPart], { type: match[1] });
+      }
+    }
+
+    // URL
+    let url = imageInput;
+    if (url.includes("githubusercontent.com")) {
+      url = url.includes("?") ? `${url}&s=400` : `${url}?s=400`;
+    }
+    const res = await fetch(url, {
+      headers: { "User-Agent": "gh-ascii" },
+      next: { revalidate: 86400 },
+    });
+    if (!res.ok) throw new Error(`Failed to fetch image: ${res.status}`);
+    return res.blob();
+  }
+
+  if (imageInput instanceof Blob) {
+    return imageInput;
+  }
+
+  if (
+    Buffer.isBuffer(imageInput) ||
+    imageInput instanceof Uint8Array ||
+    imageInput instanceof ArrayBuffer
+  ) {
+    return new Blob([imageInput as unknown as BlobPart]);
+  }
+
+  throw new Error("Unsupported image input format");
 }
 
 // ML background removal (ONNX portrait matting). Heuristic flood fills leak
@@ -314,19 +345,26 @@ function trim(lines: string[]): string[] {
 const cache = new Map<string, Promise<string[]>>();
 const CACHE_LIMIT = 100;
 
-export function avatarToAscii(
-  avatarUrl: string,
+export function imageToAscii(
+  imageInput: ImageInput,
   theme: Theme,
-  cols = 100
+  cols = 100,
+  options?: ImageToAsciiOptions
 ): Promise<string[]> {
-  const key = `${avatarUrl}|${theme}|${cols}`;
-  const hit = cache.get(key);
-  if (hit) return hit;
+  const cutout = options?.cutout !== false;
+  const key =
+    typeof imageInput === "string"
+      ? `${imageInput}|${theme}|${cols}|${cutout}`
+      : null;
+  if (key) {
+    const hit = cache.get(key);
+    if (hit) return hit;
+  }
 
   const pending = (async () => {
-    const avatar = await fetchAvatar(avatarUrl);
-    const cutout = await cutoutSubject(avatar);
-    const sub = await sampleImage(cutout, theme, cols);
+    const rawImage = await fetchImage(imageInput);
+    const processed = cutout ? await cutoutSubject(rawImage) : rawImage;
+    const sub = await sampleImage(processed, theme, cols);
     unsharp(sub);
     normalize(sub);
     const bimodal = isBimodal(sub);
@@ -400,11 +438,22 @@ export function avatarToAscii(
     return trim(lines);
   })();
 
-  pending.catch(() => cache.delete(key));
-  cache.set(key, pending);
-  if (cache.size > CACHE_LIMIT) {
-    const oldest = cache.keys().next().value;
-    if (oldest) cache.delete(oldest);
+  if (key) {
+    pending.catch(() => cache.delete(key));
+    cache.set(key, pending);
+    if (cache.size > CACHE_LIMIT) {
+      const oldest = cache.keys().next().value;
+      if (oldest) cache.delete(oldest);
+    }
   }
+
   return pending;
+}
+
+export function avatarToAscii(
+  avatarUrl: string,
+  theme: Theme,
+  cols = 100
+): Promise<string[]> {
+  return imageToAscii(avatarUrl, theme, cols);
 }
