@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-const REPO = "Bismay-exe/gh-ascii";
+const REPO = "crafter-station/gh-ascii";
 
 function formatStars(count: number): string {
   return count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count);

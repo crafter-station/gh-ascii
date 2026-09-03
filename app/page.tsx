@@ -10,6 +10,17 @@ import { cn } from "@/lib/utils";
 const DETAIL_LEVELS = [80, 100, 120, 140] as const;
 type AvatarMode = "github" | "url" | "upload";
 
+// The server only fetches http(s), so anything else is worth catching before
+// it costs a round trip.
+function isFetchableUrl(value: string): boolean {
+  try {
+    const { protocol } = new URL(value);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function Segmented<T extends string | number>({
   value,
   options,
@@ -56,12 +67,16 @@ function Generator() {
     initialImage ? "url" : "github"
   );
   const [imageUrl, setImageUrl] = useState<string>(initialImage);
+  const [appliedImageUrl, setAppliedImageUrl] = useState<string>(
+    isFetchableUrl(initialImage) ? initialImage : ""
+  );
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [uploadedPreview, setUploadedPreview] = useState<string | null>(null);
   const [uploadedSvgUrl, setUploadedSvgUrl] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
 
-  const [loading, setLoading] = useState(Boolean(initialHandle));
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const [uploadPending, setUploadPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
@@ -75,8 +90,8 @@ function Generator() {
   const colsQuery = cols !== 100 ? `&cols=${cols}` : "";
   const cutoutQuery = !bgCutout ? "&bg=keep" : "";
   const imageQuery =
-    avatarMode === "url" && imageUrl.trim()
-      ? `&image=${encodeURIComponent(imageUrl.trim())}`
+    avatarMode === "url" && appliedImageUrl
+      ? `&image=${encodeURIComponent(appliedImageUrl)}`
       : "";
 
   const cardPath =
@@ -84,13 +99,28 @@ function Generator() {
       ? `/${handle}?theme=${theme}${colsQuery}${imageQuery}${cutoutQuery}`
       : null;
 
-  // Clean up object URLs
+  // A half-typed URL is not a request worth making: the card only picks up a
+  // value once it parses and the typing has settled.
   useEffect(() => {
-    return () => {
-      if (uploadedPreview) URL.revokeObjectURL(uploadedPreview);
-      if (uploadedSvgUrl) URL.revokeObjectURL(uploadedSvgUrl);
-    };
-  }, [uploadedPreview, uploadedSvgUrl]);
+    const candidate = imageUrl.trim();
+    const timer = setTimeout(() => {
+      setAppliedImageUrl(isFetchableUrl(candidate) ? candidate : "");
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [imageUrl]);
+
+  // Each object URL is revoked when it is replaced or the page unmounts —
+  // sharing one effect revoked the still-displayed preview whenever the
+  // rendered card changed.
+  useEffect(() => {
+    if (!uploadedPreview) return;
+    return () => URL.revokeObjectURL(uploadedPreview);
+  }, [uploadedPreview]);
+
+  useEffect(() => {
+    if (!uploadedSvgUrl) return;
+    return () => URL.revokeObjectURL(uploadedSvgUrl);
+  }, [uploadedSvgUrl]);
 
   // Handle uploaded file generation via POST
   useEffect(() => {
@@ -102,6 +132,7 @@ function Generator() {
     const controller = new AbortController();
 
     async function loadUploadedCard() {
+      setUploadPending(true);
       try {
         const formData = new FormData();
         formData.append("image", uploadedFile!);
@@ -123,12 +154,7 @@ function Generator() {
         const blob = await res.blob();
         if (!isMounted) return;
 
-        const newUrl = URL.createObjectURL(blob);
-        setUploadedSvgUrl((prev) => {
-          if (prev) URL.revokeObjectURL(prev);
-          return newUrl;
-        });
-        setLoading(false);
+        setUploadedSvgUrl(URL.createObjectURL(blob));
       } catch (err: unknown) {
         if (
           !isMounted ||
@@ -136,12 +162,13 @@ function Generator() {
         ) {
           return;
         }
-        setLoading(false);
-        const message =
+        setError(
           err instanceof Error
             ? err.message
-            : "Failed to render card with uploaded image.";
-        setError(message);
+            : "Failed to render card with uploaded image."
+        );
+      } finally {
+        if (isMounted) setUploadPending(false);
       }
     }
 
@@ -154,6 +181,12 @@ function Generator() {
   }, [avatarMode, uploadedFile, handle, theme, cols, bgCutout]);
 
   const activeCardSrc = avatarMode === "upload" ? uploadedSvgUrl : cardPath;
+  // Scoped to upload mode so an in-flight POST abandoned by a mode switch
+  // can't leave the overlay up over a card that has already loaded.
+  const loading =
+    Boolean(handle) &&
+    ((avatarMode === "upload" && uploadPending) ||
+      (activeCardSrc !== null && activeCardSrc !== loadedSrc));
 
   const snippet = `<picture>
   <source media="(prefers-color-scheme: dark)" srcset="dark_mode.svg" />
@@ -188,7 +221,6 @@ Steps:
     const clean = input.trim().replace(/^@/, "");
     if (!clean) return;
     setError(null);
-    setLoading(true);
     setHandle(clean);
 
     const params = new URLSearchParams();
@@ -209,9 +241,7 @@ Steps:
       return;
     }
     setError(null);
-    if (handle) setLoading(true);
     setUploadedFile(file);
-    if (uploadedPreview) URL.revokeObjectURL(uploadedPreview);
     setUploadedPreview(URL.createObjectURL(file));
   }
 
@@ -226,10 +256,7 @@ Steps:
   function refresh<T>(setter: (v: T) => void) {
     return (value: T) => {
       setter(value);
-      if (handle) {
-        setError(null);
-        setLoading(true);
-      }
+      if (handle) setError(null);
     };
   }
 
@@ -343,10 +370,7 @@ Steps:
                   options={["github", "url", "upload"] as const}
                   onChange={(mode) => {
                     setAvatarMode(mode);
-                    if (handle) {
-                      setError(null);
-                      setLoading(true);
-                    }
+                    if (handle) setError(null);
                   }}
                   format={(m) =>
                     m === "github"
@@ -364,10 +388,7 @@ Steps:
                     value={imageUrl}
                     onChange={(e) => {
                       setImageUrl(e.target.value);
-                      if (handle) {
-                        setError(null);
-                        setLoading(true);
-                      }
+                      if (handle) setError(null);
                     }}
                     placeholder="https://example.com/photo.png (direct image URL)"
                     spellCheck={false}
@@ -378,10 +399,7 @@ Steps:
                       type="button"
                       variant="ghost"
                       size="sm"
-                      onClick={() => {
-                        setImageUrl("");
-                        if (handle) setLoading(true);
-                      }}
+                      onClick={() => setImageUrl("")}
                       className="h-9 px-2 font-mono text-xs"
                     >
                       Clear
@@ -482,10 +500,7 @@ Steps:
               options={["cutout", "original"] as const}
               onChange={(val) => {
                 setBgCutout(val === "cutout");
-                if (handle && avatarMode !== "upload") {
-                  setError(null);
-                  setLoading(true);
-                }
+                if (handle) setError(null);
               }}
               format={(v) => (v === "cutout" ? "Auto Cutout" : "Keep BG")}
             />
@@ -513,17 +528,20 @@ Steps:
                 alt={`ASCII profile card for ${handle}`}
                 className={cn("mx-auto w-full max-w-4xl", loading && "opacity-40")}
                 ref={(el) => {
-                  if (el?.complete && el.naturalWidth > 0) setLoading(false);
-                }}
-                onLoad={() => setLoading(false)}
-                onError={() => {
-                  setLoading(false);
-                  if (avatarMode !== "upload") {
-                    setHandle(null);
-                    setError(
-                      `Failed to generate card for "${handle}" — verify username and image.`
-                    );
+                  if (el?.complete && el.naturalWidth > 0) {
+                    setLoadedSrc(activeCardSrc);
                   }
+                }}
+                onLoad={() => setLoadedSrc(activeCardSrc)}
+                onError={() => {
+                  setLoadedSrc(activeCardSrc);
+                  if (avatarMode === "upload") return;
+                  if (imageQuery) {
+                    setError("That image URL could not be rendered.");
+                    return;
+                  }
+                  setHandle(null);
+                  setError(`No card for "${handle}" — does that user exist?`);
                 }}
               />
             </div>

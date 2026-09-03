@@ -1,5 +1,6 @@
 import { Jimp, intToRGBA } from "jimp";
 import { GLYPHS, type Glyph } from "./glyphs";
+import { loadImage, type ImageInput } from "./image-source";
 
 export type Theme = "dark" | "light";
 
@@ -64,49 +65,10 @@ interface Cell {
   background: boolean;
 }
 
-export type ImageInput = string | Blob | Buffer | Uint8Array | ArrayBuffer;
+export type { ImageInput };
 
 export interface ImageToAsciiOptions {
   cutout?: boolean;
-}
-
-async function fetchImage(imageInput: ImageInput): Promise<Blob> {
-  if (typeof imageInput === "string") {
-    // Data URI support
-    if (imageInput.startsWith("data:")) {
-      const match = imageInput.match(/^data:([^;]+);base64,(.+)$/);
-      if (match) {
-        const buffer = Buffer.from(match[2], "base64");
-        return new Blob([buffer as unknown as BlobPart], { type: match[1] });
-      }
-    }
-
-    // URL
-    let url = imageInput;
-    if (url.includes("githubusercontent.com")) {
-      url = url.includes("?") ? `${url}&s=400` : `${url}?s=400`;
-    }
-    const res = await fetch(url, {
-      headers: { "User-Agent": "gh-ascii" },
-      next: { revalidate: 86400 },
-    });
-    if (!res.ok) throw new Error(`Failed to fetch image: ${res.status}`);
-    return res.blob();
-  }
-
-  if (imageInput instanceof Blob) {
-    return imageInput;
-  }
-
-  if (
-    Buffer.isBuffer(imageInput) ||
-    imageInput instanceof Uint8Array ||
-    imageInput instanceof ArrayBuffer
-  ) {
-    return new Blob([imageInput as unknown as BlobPart]);
-  }
-
-  throw new Error("Unsupported image input format");
 }
 
 // ML background removal (ONNX portrait matting). Heuristic flood fills leak
@@ -362,7 +324,7 @@ export function imageToAscii(
   }
 
   const pending = (async () => {
-    const rawImage = await fetchImage(imageInput);
+    const rawImage = await loadImage(imageInput);
     const processed = cutout ? await cutoutSubject(rawImage) : rawImage;
     const sub = await sampleImage(processed, theme, cols);
     unsharp(sub);
@@ -448,12 +410,4 @@ export function imageToAscii(
   }
 
   return pending;
-}
-
-export function avatarToAscii(
-  avatarUrl: string,
-  theme: Theme,
-  cols = 100
-): Promise<string[]> {
-  return imageToAscii(avatarUrl, theme, cols);
 }
