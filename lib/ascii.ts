@@ -1,5 +1,6 @@
 import { Jimp, intToRGBA } from "jimp";
 import { GLYPHS, type Glyph } from "./glyphs";
+import { loadImage, type ImageInput } from "./image-source";
 
 export type Theme = "dark" | "light";
 
@@ -64,18 +65,10 @@ interface Cell {
   background: boolean;
 }
 
-async function fetchAvatar(avatarUrl: string): Promise<Blob> {
-  // Ask for a larger source than the sampling grid so the resize averages
-  // real detail instead of upscaling a thumbnail.
-  const url = avatarUrl.includes("?")
-    ? `${avatarUrl}&s=400`
-    : `${avatarUrl}?s=400`;
-  const res = await fetch(url, {
-    headers: { "User-Agent": "gh-ascii" },
-    next: { revalidate: 86400 },
-  });
-  if (!res.ok) throw new Error(`Failed to fetch avatar: ${res.status}`);
-  return res.blob();
+export type { ImageInput };
+
+export interface ImageToAsciiOptions {
+  cutout?: boolean;
 }
 
 // ML background removal (ONNX portrait matting). Heuristic flood fills leak
@@ -314,19 +307,26 @@ function trim(lines: string[]): string[] {
 const cache = new Map<string, Promise<string[]>>();
 const CACHE_LIMIT = 100;
 
-export function avatarToAscii(
-  avatarUrl: string,
+export function imageToAscii(
+  imageInput: ImageInput,
   theme: Theme,
-  cols = 100
+  cols = 100,
+  options?: ImageToAsciiOptions
 ): Promise<string[]> {
-  const key = `${avatarUrl}|${theme}|${cols}`;
-  const hit = cache.get(key);
-  if (hit) return hit;
+  const cutout = options?.cutout !== false;
+  const key =
+    typeof imageInput === "string"
+      ? `${imageInput}|${theme}|${cols}|${cutout}`
+      : null;
+  if (key) {
+    const hit = cache.get(key);
+    if (hit) return hit;
+  }
 
   const pending = (async () => {
-    const avatar = await fetchAvatar(avatarUrl);
-    const cutout = await cutoutSubject(avatar);
-    const sub = await sampleImage(cutout, theme, cols);
+    const rawImage = await loadImage(imageInput);
+    const processed = cutout ? await cutoutSubject(rawImage) : rawImage;
+    const sub = await sampleImage(processed, theme, cols);
     unsharp(sub);
     normalize(sub);
     const bimodal = isBimodal(sub);
@@ -400,11 +400,14 @@ export function avatarToAscii(
     return trim(lines);
   })();
 
-  pending.catch(() => cache.delete(key));
-  cache.set(key, pending);
-  if (cache.size > CACHE_LIMIT) {
-    const oldest = cache.keys().next().value;
-    if (oldest) cache.delete(oldest);
+  if (key) {
+    pending.catch(() => cache.delete(key));
+    cache.set(key, pending);
+    if (cache.size > CACHE_LIMIT) {
+      const oldest = cache.keys().next().value;
+      if (oldest) cache.delete(oldest);
+    }
   }
+
   return pending;
 }
